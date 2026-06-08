@@ -8,95 +8,150 @@
 #include <sys/fanotify.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <string.h>
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
-    int fan;
-    int mount_fd, event_fd;
-    char buf[4096];
-    char fdpath[32];
-    char path[PATH_MAX + 1];
-    struct file_handle *file_handle;
+	int fan;
+	int mount_fd;
+	char buf[4096];
+	struct file_handle *file_handle;
 
-    ssize_t buflen, linklen;
-    struct fanotify_event_metadata *metadata;
-    struct fanotify_event_info_fid *fid;
+	ssize_t buflen;
+	struct fanotify_event_metadata *metadata;
+	struct fanotify_event_info_fid *fid;
 
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s /dir\n", argv[0]);
-        exit(EXIT_FAILURE);
-    }
+	if (argc != 2)
+	{
+		fprintf(stderr, "Usage: %s /dir\n", argv[0]);
+		exit(EXIT_FAILURE);
+	}
 
-    mount_fd = open(argv[1], O_DIRECTORY | O_RDONLY);
-    if (mount_fd == -1) {
-        perror(argv[1]);
-        exit(EXIT_FAILURE);
-    }
+	mount_fd = open(argv[1], O_DIRECTORY | O_RDONLY);
+	if (mount_fd == -1)
+	{
+		perror(argv[1]);
+		exit(EXIT_FAILURE);
+	}
 
-    fan = fanotify_init(FAN_CLASS_NOTIF | FAN_REPORT_FID, O_RDWR);
-    if(fan == -1) {
-        perror("fanotify_init");
-        exit(EXIT_FAILURE);
-    }
+	fan = fanotify_init(FAN_CLASS_NOTIF | FAN_REPORT_FID | FAN_REPORT_DFID_NAME, O_RDONLY | O_LARGEFILE);
+	if (fan == -1)
+	{
+		perror("fanotify_init");
+		exit(EXIT_FAILURE);
+	}
 
-    int ret = fanotify_mark(fan,
-                            FAN_MARK_ADD,
-                            FAN_CREATE | FAN_DELETE | FAN_MODIFY | FAN_EVENT_ON_CHILD,
-                            AT_FDCWD,
-                            argv[1]
-                            );
-    if(ret == -1) {
-        perror("fanotify_mark");
-        exit(EXIT_FAILURE);
-    }
+	int ret = fanotify_mark(fan,
+													FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
+													FAN_CREATE | FAN_DELETE | FAN_MODIFY,
+													AT_FDCWD,
+													argv[1]);
+	if (ret == -1)
+	{
+		perror("fanotify_mark");
+		exit(EXIT_FAILURE);
+	}
 
-    while(1) {
-        buflen = read(fan, buf, sizeof(buf));
-        metadata = (struct fanotify_event_metadata*)&buf;
+	while (1)
+	{
+		buflen = read(fan, buf, sizeof(buf));
+		metadata = (struct fanotify_event_metadata *)&buf;
 
-        for (; FAN_EVENT_OK(metadata, buflen); metadata = FAN_EVENT_NEXT(metadata, buflen)) {
-            fid = (struct fanotify_event_info_fid *) (metadata + 1);
-            file_handle = (struct file_handle *) fid->handle;
+		for (; FAN_EVENT_OK(metadata, buflen); metadata = FAN_EVENT_NEXT(metadata, buflen))
+		{
+			fid = (struct fanotify_event_info_fid *)(metadata + 1);
+			file_handle = (struct file_handle *)fid->handle;
 
-            /* Ensure that the event info is of the correct type */
+			if (fid->hdr.info_type == FAN_EVENT_INFO_TYPE_DFID_NAME)
+			{
+				/* file_handle is for the directory; child name follows the handle bytes */
+				struct file_handle *dir_fh = file_handle;
+				char *child_name = (char *)dir_fh->f_handle + dir_fh->handle_bytes;
 
-            if (fid->hdr.info_type != FAN_EVENT_INFO_TYPE_FID) {
+				/* open the directory by handle to get a fd we can readlink from */
+				int dirfd = open_by_handle_at(mount_fd, dir_fh, O_PATH | O_RDONLY);
+				if (dirfd == -1)
+				{
+					if (errno == ESTALE)
+					{
+						printf("%s\n", child_name); /* dir gone; at least print name */
+						continue;
+					}
+					else
+					{
+						perror("open_by_handle_at(dir)");
+						exit(EXIT_FAILURE);
+					}
+				}
 
-                fprintf(stderr, "Received unexpected event info type.\n");
-                exit(EXIT_FAILURE);
-            }
+				char fdpath[64];
+				char dirpath[PATH_MAX + 1];
+				snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", dirfd);
 
-            if (metadata->mask == FAN_CREATE)
-                printf("FAN_CREATE");
+				ssize_t linklen = readlink(fdpath, dirpath, sizeof(dirpath) - 1);
+				if (linklen == -1)
+				{
+					perror("readlink(dir)");
+					close(dirfd);
+					continue;
+				}
+				dirpath[linklen] = '\0';
 
-            if (metadata->mask == FAN_DELETE)
-                printf("FAN_DELETE");
+				/* remove " (deleted)" suffix if present */
+				const char *deleted_suffix = " (deleted)";
+				size_t suflen = strlen(deleted_suffix);
+				if ((size_t)linklen >= suflen &&
+						strcmp(dirpath + linklen - suflen, deleted_suffix) == 0)
+				{
+					dirpath[linklen - suflen] = '\0';
+				}
 
-            if (metadata->mask == FAN_MODIFY)
-                printf("FAN_MODIFY");
+				/* dirpath and child_name are set and dirpath is NUL-terminated */
 
-            event_fd = open_by_handle_at(mount_fd, file_handle, O_RDONLY);
-            if (event_fd == -1) {
-                if (errno == ESTALE) {
-                    printf("File handle is no longer valid. "
-                           "File has been deleted\n");
-                    continue;
-                } else {
-                    perror("open_by_handle_at");
-                    exit(EXIT_FAILURE);
-                }
-            }
+				char fullpath[PATH_MAX + 1];
+				size_t dirlen = strlen(dirpath);
+				size_t namelen = strlen(child_name);
 
-            sprintf(fdpath, "/proc/self/fd/%d", event_fd);
-            linklen = readlink(fdpath, path, sizeof(path) - 1);
-            if (linklen == -1) {
-                perror("readlink");
-            }
-            path[linklen] = '\0';
-            printf("%s\n", path);
+				/* Ensure dirlen <= PATH_MAX */
+				if (dirlen > PATH_MAX)
+					dirlen = PATH_MAX;
 
-            close(metadata->fd);
-            metadata = FAN_EVENT_NEXT(metadata, buflen);
-        }
-    }
+				/* Compute available space for name (+1 for '/' if needed, +1 for NUL) */
+				size_t need_sep = (dirlen > 0 && dirpath[dirlen - 1] == '/') ? 0 : 1;
+				size_t avail = (dirlen >= PATH_MAX) ? 0 : (PATH_MAX - dirlen - need_sep);
+
+				/* Copy directory part */
+				if (dirlen > 0)
+				{
+					memcpy(fullpath, dirpath, dirlen);
+				}
+				size_t copylen = (namelen > avail) ? avail : namelen;
+
+				/* Add separator if required and there is space */
+				size_t pos = dirlen;
+				if (need_sep && avail > 0)
+				{
+					fullpath[pos++] = '/';
+					avail--; /* one less for name */
+				}
+
+				/* Copy (possibly truncated) child name */
+				if (copylen > 0)
+				{
+					memcpy(fullpath + pos, child_name, copylen);
+					pos += copylen;
+				}
+
+				/* NUL terminate */
+				fullpath[pos] = '\0';
+
+				printf("%s\n", fullpath);
+				fflush(stdout);
+				close(dirfd);
+			}
+
+			close(metadata->fd);
+			metadata = FAN_EVENT_NEXT(metadata, buflen);
+		}
+	}
 }
