@@ -8,15 +8,19 @@ shift 2
 function error() {
 	[ -n "$1" ] && echo "$1" && echo
 	echo "Usage: $0 <source dir> <rsync target> [options]"
+	echo "	-d <seconds>   Delay to batch events (default $delay)"
+	echo "	-q             Quiet mode – do not print each file path"
 	exit 1
 }
 
 [ ! -d "$dir" ] && error "Source is not a dir"
 [ -z "$target" ] && error "Target directory not specified"
+quiet=
 
 # Parse arguments
-while getopts "d:s:t:" opt; do
+while getopts "d:s:t:q" opt; do
 	case $opt in
+	q) quiet=ON ;;
 	d)
 		delay=$OPTARG
 		[[ $OPTARG =~ ^[0-9]+$ ]] || error "Delay must be a number"
@@ -56,7 +60,7 @@ while true; do
 
 		case "$path" in
 		"$dir" | "$dir"/*)
-			echo $path
+			[ -z "$quiet" ] && echo $path
 			events+=("${path#$dir/}")
 			;;
 		esac

@@ -32,6 +32,7 @@ The target can be any local or remote path that rsync understands.
 | Option | Description |
 |--------|-------------|
 | `-d`   | Delay in seconds to accumulate events before invoking `rsync`. Default: `60`. |
+| `-q`   | Quiet mode – do not print each file path. |
 
 Example with a custom delay of 5 minutes:
 
@@ -45,10 +46,11 @@ bash
 - File creation (`FAN_CREATE`)
 - File deletion (`FAN_DELETE`)
 - File modification (`FAN_MODIFY`)
+- File renaming (`FAN_MOVED_FROM | FAN_MOVED_TO`)
+- Attribute changes (`FAN_ATTRIB`)
 
 **Planned**
 
-- Attribute changes (`FAN_ATTRIB`)
 - Directory deletion events
 
 ## SSH multiplexing (recommended for remote sync)
@@ -72,7 +74,7 @@ fasync only reacts to actual changes and never walks the directory tree.
 
 ## Requirements
 
-Linux kernel ≥ 4.20 (for FAN_MARK_FILESYSTEM). Older kernels support fanotify but without the filesystem‑wide flag.
+Linux kernel ≥ 5.1.
 The source directory must reside on a mountable filesystem (e.g. a dedicated partition or external drive). A plain subdirectory of / will work only if you mark the whole root filesystem and then filter; performance is still fine.
 
 ## License
