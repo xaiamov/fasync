@@ -44,7 +44,7 @@ function flush() {
 			echo events
 		fi
 		# -a = -rlptgoD
-		printf '%s\n' "${events[@]}" | rsync --delete --delete-missing-args -lptgoD --files-from=- "$dir" "$target"
+		printf '%s\n' "${events[@]}" | sort -u | rsync --delete --delete-missing-args -lptgoD --files-from=- "$dir" "$target"
 	) &
 	events=()
 }
