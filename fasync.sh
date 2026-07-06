@@ -35,32 +35,37 @@ coproc FAWATCH { ./fawatch "$dir"; }
 echo "[$(date)] Started fawatch (PID ${FAWATCH_PID}) on $dir"
 
 declare -a events
+
 function flush() {
-	(
-		echo -n "[$(date)] Processing ${#events[@]} "
-		if [ ${#events[@]} -eq 1 ]; then
-			echo event
-		else
-			echo events
-		fi
-		# -a = -rlptgoD
-		printf '%s\n' "${events[@]}" | sort -u | rsync --delete --delete-missing-args -lptgoD --files-from=- "$dir" "$target"
-	) &
+	local -a files
+	mapfile -t files < <(printf '%s\n' "${events[@]}" | cut -f2- | sort -u)
 	events=()
+	(
+		echo -n "[$(date)] Processing ${#files[@]} "
+		if [ ${#files[@]} -eq 1 ]; then
+			echo file
+		else
+			echo files
+		fi
+		
+		# -a = -rlptgoD
+		printf '%s\n' "${files[@]}" | rsync --delete --delete-missing-args -lptgoD --files-from=- "$dir" "$target"
+	) &
 }
 
 last_flush=$(date +%s)
 while true; do
 	# Read from the co‑process stdout with a 1‑second timeout
-	if read -t 1 -r path <&${FAWATCH[0]}; then
+	if read -t 1 -r line <&${FAWATCH[0]}; then
 
 		if [ ${#events[@]} -eq 0 ]; then
 			last_flush=$(date +%s)
 		fi
 
+		path="${line#*$'\t'}"
 		case "$path" in
 		"$dir" | "$dir"/*)
-			[ -z "$quiet" ] && echo $path
+			[ -z "$quiet" ] && echo $line
 			events+=("${path#$dir/}")
 			;;
 		esac

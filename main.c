@@ -72,8 +72,8 @@ int main(int argc, char **argv)
                 if (dirfd == -1) {
                     if (errno == ESTALE) {
                         // dir gone; at least print name
-                        // printf("%s\t%s\n", event_type, child_name);
-                        printf("%s\n", child_name);
+                        printf("%s\t%s\n", event_type, child_name);
+                        // printf("%s\n", child_name);
                         continue;
                     } else {
                         perror("open_by_handle_at(dir)");
@@ -125,8 +125,8 @@ int main(int argc, char **argv)
                 }
                 fullpath[pos] = '\0';
 
-                // printf("%s\t%s\n", event_type, fullpath);
-                printf("%s\n", fullpath);
+                printf("%s\t%s\n", event_type, fullpath);
+                // printf("%s\n", fullpath);
                 fflush(stdout);
                 close(dirfd);
             }
