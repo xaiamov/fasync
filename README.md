@@ -31,9 +31,8 @@ make
 ```bash
 ./fasync.sh /path/to/source user@host:/path/to/target [options]
 ```
-
-[*] The source path must be on a filesystem that supports fanotify (any modern Linux filesystem).
-[*] The target can be any local or remote path that rsync understands.
+- The source path must be on a filesystem that supports fanotify (any modern Linux filesystem).
+- The target can be any local or remote path that rsync understands.
 
 ## Options
 
@@ -68,19 +67,18 @@ Here, files that are deleted on the source will be removed from the target only 
 
 **Currently implemented**
 
-[*] File creation (FAN_CREATE)
-[*] File deletion (FAN_DELETE)
-[*] File modification (FAN_MODIFY)
-[*] File renaming (FAN_MOVED_FROM / FAN_MOVED_TO)
-[*] Attribute changes (FAN_ATTRIB)
-[*] Delayed deletion – configurable grace period for safe removal
-Batched rsync – only changed files are transferred
-Quiet mode for minimal log output
+- File creation (FAN_CREATE)
+- File deletion (FAN_DELETE)
+- File modification (FAN_MODIFY)
+- File renaming (FAN_MOVED_FROM / FAN_MOVED_TO)
+- Attribute changes (FAN_ATTRIB)
+- Delayed deletion – configurable grace period for safe removal
+- Quiet mode for minimal log output
 
 **Planned**
 
-[*] Directory deletion events
-[*] More flexible filtering (include/exclude patterns)
+- Directory deletion events
+- More flexible filtering (include/exclude patterns)
 
 ## How delayed deletion works
 When `-D <seconds>` is set to a value greater than 0, the script does not immediately add deleted files to the `rsync` batch. Instead:
@@ -109,14 +107,14 @@ This keeps one SSH connection open for up to 10 minutes, dramatically reducing l
 
 ## Why fanotify instead of inotify?
 
-[*] **inotify** requires recursive watches on every subdirectory – impossible when you have millions of directories.
-[*] **fanotify** with FAN_MARK_FILESYSTEM watches the whole mount with a single mark, regardless of how many files or directories exist.
-[*] `fasync` only reacts to actual changes and never walks the directory tree.
+- **inotify** requires recursive watches on every subdirectory – impossible when you have millions of directories.
+- **fanotify** with FAN_MARK_FILESYSTEM watches the whole mount with a single mark, regardless of how many files or directories exist.
+- `fasync` only reacts to actual changes and never walks the directory tree.
 
 ## Requirements
 
-[*] Linux kernel ≥ 5.1.
-[*] The source directory must reside on a mountable filesystem (e.g. a dedicated partition or external drive). A plain subdirectory of `/` will work only if you mark the whole root filesystem and then filter; performance is still fine.
+- Linux kernel ≥ 5.1.
+- The source directory must reside on a mountable filesystem (e.g. a dedicated partition or external drive). A plain subdirectory of `/` will work only if you mark the whole root filesystem and then filter; performance is still fine.
 
 ## License
 
