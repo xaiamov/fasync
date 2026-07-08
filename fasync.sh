@@ -56,6 +56,7 @@ coproc FAWATCH { ./fawatch "$dir"; }
 echo "[$(date)] Started fawatch (PID ${FAWATCH_PID}) on $dir"
 
 declare -a events=()
+declare -a events_delete=()
 last_flush=$(date +%s)
 last_delete_check=$(date +%s)
 
@@ -72,7 +73,7 @@ process_deleted_events() {
     while IFS=$'\t' read -r ts path; do
         if [ "$ts" -le "$threshold" ]; then
             if [ ! -e "$path" ]; then
-                events+=("${path#$dir/}")
+                events_delete+=("${path#$dir/}")
                 count=$((count + 1))
             fi
         else
@@ -88,17 +89,24 @@ process_deleted_events() {
 
 # --------------------------- Function to flush the buffer ----------------
 flush() {
-    local -a files
+    local -a files del_files
 
     mapfile -t files < <(printf '%s\n' "${events[@]}" | sort -u)
-    events=()    # clear global buffer
+    events=()
 
-    [ ${#files[@]} -eq 0 ] && return
+    mapfile -t del_files < <(printf '%s\n' "${events_delete[@]}" | sort -u)
+    events_delete=()
 
-    echo "[$(date)] Processing ${#files[@]} file(s)"
+    # Subsequent exeution in bg
     (
-        # -a = -rlptgoD
-        printf '%s\n' "${files[@]}" | rsync --delete --delete-missing-args -lptgoD --files-from=- "$dir" "$target"
+        if [ ${#files[@]} -gt 0 ]; then
+            echo "[$(date)] Syncing ${#files[@]} file(s)"
+            printf '%s\n' "${files[@]}" | rsync -lptgoD --files-from=- "$dir" "$target"
+        fi
+        if [ ${#del_files[@]} -gt 0 ]; then
+            echo "[$(date)] Removing ${#del_files[@]} file(s)"
+            printf '%s\n' "${del_files[@]}" | rsync --delete --delete-missing-args -lptgoD --files-from=- "$dir" "$target"
+        fi
     ) &
 }
 
@@ -106,45 +114,40 @@ flush() {
 while true; do
     current_time=$(date +%s)
 
-    # Read event with a 1‑second timeout
     if read -t 1 -r line <&${FAWATCH[0]}; then
-        # If buffer is empty, reset flush timer
-        if [ ${#events[@]} -eq 0 ]; then
+        # If both buffers are empty, starting new delay window
+        if [ ${#events[@]} -eq 0 ] && [ ${#events_delete[@]} -eq 0 ]; then
             last_flush=$current_time
         fi
 
         operation="${line%%$'\t'*}"
         path="${line#*$'\t'}"
 
-        # Filtering is now done inside fawatch – every event is within $dir
-        if [[ "$path" == "$deleted_log" && "$operation" == "DELETE" ]]; then
-            continue
-        fi
-
+        [[ "$path" == "$deleted_log" && "$operation" == "DELETE" ]] && continue
         [ -z "$quiet" ] && echo "$line"
 
-        if [ "$operation" = "DELETE" ] && [ $delete_delay -gt 0 ]; then
-            # Postpone deletion
-            printf "%s\t%s\n" "$(date +%s)" "$path" >> "$deleted_log"
+        if [ "$operation" = "DELETE" ]; then
+            if [ $delete_delay -gt 0 ]; then
+                printf "%s\t%s\n" "$(date +%s)" "$path" >> "$deleted_log"
+            else
+                events_delete+=("${path#$dir/}")
+            fi
         else
-            # Normal event (or DELETE with zero delay) – add to buffer
             events+=("${path#$dir/}")
         fi
     fi
 
-    # Check delayed deletions every delete_check_interval seconds
     if ((current_time - last_delete_check >= delete_check_interval)); then
         process_deleted_events
         last_delete_check=$current_time
     fi
 
-    # Flush buffer after delay if there are events
-    if ((current_time - last_flush >= delay)) && [ ${#events[@]} -gt 0 ]; then
+    # Flush buffers
+    if ((current_time - last_flush >= delay)) && ((${#events[@]} > 0 || ${#events_delete[@]} > 0)); then
         flush
         last_flush=$current_time
     fi
 
-    # Check if fawatch is still alive
     if ! kill -0 ${FAWATCH_PID} 2>/dev/null; then
         echo "[$(date)] ERROR: fawatch (PID ${FAWATCH_PID}) died unexpectedly"
         exit 1
