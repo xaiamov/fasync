@@ -47,8 +47,7 @@ done
 [ -z "$target" ] && { echo "Target directory not specified"; exit 1; }
 
 # --------------------------- Service file for delayed deletions ----------
-script_hash=$(echo "$(realpath "$0")" | md5sum | cut -c1-16)
-deleted_log="$dir/.deleted.${script_hash}.log"
+deleted_log="$dir/.fasync_deleted.log"
 
 # --------------------------- Start fawatch as a co-process ----------------
 cd "$(dirname "$0")" || exit 1
@@ -72,8 +71,9 @@ process_deleted_events() {
 
     while IFS=$'\t' read -r ts path; do
         if [ "$ts" -le "$threshold" ]; then
-            if [ ! -e "$path" ]; then
-                events_delete+=("${path#$dir/}")
+            # $path is relative to $dir
+            if [ ! -e "$dir/$path" ]; then
+                events_delete+=("$path")
                 count=$((count + 1))
             fi
         else
@@ -83,31 +83,29 @@ process_deleted_events() {
 
     mv "$temp_file" "$deleted_log"
     if [ $count -gt 0 ]; then
-        echo "[$(date)] Marked $count file(s) for deletion (will be removed during next sync)"
+        echo "[$(date)] Marked $count file(s) for deletion"
     fi
 }
 
 # --------------------------- Function to flush the buffer ----------------
 flush() {
-    local -a files del_files
-
-    mapfile -t files < <(printf '%s\n' "${events[@]}" | sort -u)
-    events=()
-
-    mapfile -t del_files < <(printf '%s\n' "${events_delete[@]}" | sort -u)
-    events_delete=()
-
     # Subsequent exeution in bg
     (
-        if [ ${#files[@]} -gt 0 ]; then
+        if [ ${#events[@]} -gt 0 ]; then
+						local -a files
+						mapfile -t files < <(printf '%s\n' "${events[@]}" | sort -u)
             echo "[$(date)] Syncing ${#files[@]} file(s)"
-            printf '%s\n' "${files[@]}" | rsync -lptgoD --files-from=- "$dir" "$target"
+            printf '%s\n' "${files[@]}" | rsync -lptgoD --delete-missing-args --files-from=- "$dir" "$target"
         fi
-        if [ ${#del_files[@]} -gt 0 ]; then
+        if [ ${#events_delete[@]} -gt 0 ]; then
+						local -a del_files
+						mapfile -t del_files < <(printf '%s\n' "${events_delete[@]}" | sort -u)
             echo "[$(date)] Removing ${#del_files[@]} file(s)"
             printf '%s\n' "${del_files[@]}" | rsync --delete --delete-missing-args -lptgoD --files-from=- "$dir" "$target"
         fi
     ) &
+    events=()
+    events_delete=()
 }
 
 # --------------------------- Main loop ---------------------------------
@@ -120,21 +118,30 @@ while true; do
             last_flush=$current_time
         fi
 
-        operation="${line%%$'\t'*}"
-        path="${line#*$'\t'}"
+				operation="${line%%$'\t'*}"
+				path="${line#*$'\t'}"
 
-        [[ "$path" == "$deleted_log" && "$operation" == "DELETE" ]] && continue
-        [ -z "$quiet" ] && echo "$line"
+				# Ignoring watching dir events
+				rel_path="${path#$dir/}"
+				if [ -z "$rel_path" ]; then
+						continue
+				fi
 
-        if [ "$operation" = "DELETE" ]; then
-            if [ $delete_delay -gt 0 ]; then
-                printf "%s\t%s\n" "$(date +%s)" "$path" >> "$deleted_log"
-            else
-                events_delete+=("${path#$dir/}")
-            fi
-        else
-            events+=("${path#$dir/}")
-        fi
+				if [[ "$path" == "$deleted_log" && "$operation" == "DELETE" ]]; then
+						continue
+				fi
+
+				[ -z "$quiet" ] && echo "$line"
+
+				if [ "$operation" = "DELETE" ]; then
+						if [ $delete_delay -gt 0 ]; then
+								printf "%s\t%s\n" "$current_time" "$rel_path" >> "$deleted_log"
+						else
+								events_delete+=("$rel_path")
+						fi
+				else
+						events+=("$rel_path")
+				fi
     fi
 
     if ((current_time - last_delete_check >= delete_check_interval)); then
