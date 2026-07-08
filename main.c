@@ -4,14 +4,13 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/types.h>
+#include <string.h>
 #include <sys/fanotify.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
-#include <string.h>
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     int fan, mount_fd;
     char buf[4096];
     ssize_t buflen;
@@ -20,6 +19,13 @@ int main(int argc, char **argv)
 
     if (argc != 2) {
         fprintf(stderr, "Usage: %s /dir\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+
+    // Resolve the watched directory to an absolute canonical path
+    char watch_path[PATH_MAX + 1];
+    if (realpath(argv[1], watch_path) == NULL) {
+        perror("realpath");
         exit(EXIT_FAILURE);
     }
 
@@ -37,17 +43,23 @@ int main(int argc, char **argv)
     }
 
     if (fanotify_mark(fan, FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
-											FAN_CREATE | FAN_DELETE | FAN_MODIFY | FAN_MOVED_FROM | FAN_MOVED_TO | FAN_ATTRIB,
+                      FAN_CREATE | FAN_DELETE | FAN_MODIFY |
+                      FAN_MOVED_FROM | FAN_MOVED_TO | FAN_ATTRIB,
                       AT_FDCWD, argv[1]) == -1) {
         perror("fanotify_mark");
         exit(EXIT_FAILURE);
     }
 
+    int is_root = (strcmp(watch_path, "/") == 0);
+    size_t watch_len = strlen(watch_path);
+
     for (;;) {
         buflen = read(fan, buf, sizeof(buf));
         metadata = (struct fanotify_event_metadata *)buf;
 
-        for (; FAN_EVENT_OK(metadata, buflen); metadata = FAN_EVENT_NEXT(metadata, buflen)) {
+        for (; FAN_EVENT_OK(metadata, buflen);
+             metadata = FAN_EVENT_NEXT(metadata, buflen)) {
+
             const char *event_type = "UNKNOWN";
             if (metadata->mask & FAN_CREATE)
                 event_type = "CREATE";
@@ -70,12 +82,10 @@ int main(int argc, char **argv)
 
                 int dirfd = open_by_handle_at(mount_fd, dir_fh, O_PATH | O_RDONLY);
                 if (dirfd == -1) {
-                    if (errno == ESTALE) {
-                        // dir gone; at least print name
-                        printf("%s\t%s\n", event_type, child_name);
-                        // printf("%s\n", child_name);
+                    // Cannot determine path, skip this event
+                    if (errno == ESTALE)
                         continue;
-                    } else {
+                    else {
                         perror("open_by_handle_at(dir)");
                         exit(EXIT_FAILURE);
                     }
@@ -93,6 +103,7 @@ int main(int argc, char **argv)
                 }
                 dirpath[linklen] = '\0';
 
+                // Remove " (deleted)" suffix if present
                 const char *deleted_suffix = " (deleted)";
                 size_t suflen = strlen(deleted_suffix);
                 if ((size_t)linklen >= suflen &&
@@ -100,12 +111,12 @@ int main(int argc, char **argv)
                     dirpath[linklen - suflen] = '\0';
                 }
 
+                // Construct full path: dirpath + '/' + child_name
                 char fullpath[PATH_MAX + 1];
                 size_t dirlen = strlen(dirpath);
                 size_t namelen = strlen(child_name);
 
-                if (dirlen > PATH_MAX)
-                    dirlen = PATH_MAX;
+                if (dirlen > PATH_MAX) dirlen = PATH_MAX;
 
                 size_t need_sep = (dirlen > 0 && dirpath[dirlen - 1] == '/') ? 0 : 1;
                 size_t avail = (dirlen >= PATH_MAX) ? 0 : (PATH_MAX - dirlen - need_sep);
@@ -125,8 +136,18 @@ int main(int argc, char **argv)
                 }
                 fullpath[pos] = '\0';
 
+                // --- Path filtering ---
+                // Only print events whose fullpath is under the watched directory
+                if (!is_root) {
+                    if (strncmp(fullpath, watch_path, watch_len) != 0 ||
+                        (fullpath[watch_len] != '\0' && fullpath[watch_len] != '/')) {
+                        close(dirfd);
+                        continue;  // skip this event
+                    }
+                }
+
+                // Event is inside the watched tree -> print it
                 printf("%s\t%s\n", event_type, fullpath);
-                // printf("%s\n", fullpath);
                 fflush(stdout);
                 close(dirfd);
             }

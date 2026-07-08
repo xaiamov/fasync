@@ -116,23 +116,20 @@ while true; do
         operation="${line%%$'\t'*}"
         path="${line#*$'\t'}"
 
-        # Process only events inside the monitored directory
-        case "$path" in
-        "$dir" | "$dir"/*)
-            # Ignore service log file (only DELETE events are skipped)
-            [[ "$path" == "$deleted_log" && "$operation" == "DELETE" ]] && continue
+        # Filtering is now done inside fawatch – every event is within $dir
+        if [[ "$path" == "$deleted_log" && "$operation" == "DELETE" ]]; then
+            continue
+        fi
 
-            [ -z "$quiet" ] && echo "$line"
+        [ -z "$quiet" ] && echo "$line"
 
-            if [ "$operation" = "DELETE" ] && [ $delete_delay -gt 0 ]; then
-                # Postpone deletion
-                printf "%s\t%s\n" "$(date +%s)" "$path" >> "$deleted_log"
-            else
-                # Normal event (or DELETE with zero delay) – add to buffer
-                events+=("${path#$dir/}")
-            fi
-            ;;
-        esac
+        if [ "$operation" = "DELETE" ] && [ $delete_delay -gt 0 ]; then
+            # Postpone deletion
+            printf "%s\t%s\n" "$(date +%s)" "$path" >> "$deleted_log"
+        else
+            # Normal event (or DELETE with zero delay) – add to buffer
+            events+=("${path#$dir/}")
+        fi
     fi
 
     # Check delayed deletions every delete_check_interval seconds
