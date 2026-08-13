@@ -14,12 +14,14 @@ delay=60                     # buffer delay (seconds)
 delete_delay=0               # deletion delay (0 – immediate)
 quiet=                       # quiet mode (do not print each event)
 delete_check_interval=60     # interval for checking deletion log (seconds)
+exclude_log=                 # option to exclude deletion logs from sync
 
 # --------------------------- Argument parsing ---------------------------
 if [ $# -lt 2 ]; then
-    echo "Usage: $0 <source dir> <rsync target> [options]"
+    echo "Usage: $0 <source dir> <target (rsync path or s3://bucket/path)> [options]"
     echo "  -d <seconds>   Delay to batch events (default 60)"
     echo "  -D <seconds>   Delay for DELETE events (default 0 – immediate)"
+    echo "  -s             Skip fasync deletion log from syncing to target (useful for s3 cloud sync)"
     echo "  -q             Quiet mode – do not print each file path"
     exit 1
 fi
@@ -28,9 +30,10 @@ dir="$(realpath "$1")"
 target="$2"
 shift 2
 
-while getopts "d:D:q" opt; do
+while getopts "d:D:qs" opt; do
     case $opt in
         q) quiet=ON ;;
+        s) exclude_log=ON ;;
         d)
             delay=$OPTARG
             [[ $OPTARG =~ ^[0-9]+$ ]] || { echo "Delay must be a number"; exit 1; }
@@ -64,8 +67,9 @@ else
 fi
 
 # --------------------------- Service file for delayed deletions ----------
-safe_target="$(echo "$target" | tr -c '[:alnum:]' '_')"
+safe_target="$(echo "$target" | tr -c '[:alnum:]' '_' | tr -s '_')"
 deleted_log="$dir/.fasync_deleted_${safe_target}.log"
+deleted_log_name="${deleted_log##*/}"
 
 # --------------------------- Start fawatch as a co-process ----------------
 cd "$(dirname "$0")" || exit 1
@@ -109,6 +113,9 @@ process_deleted_events() {
 flush() {
     # Subsequent exeution in bg
     (
+        local s3_opts=""
+        if [ -n "$quiet" ]; then s3_opts="--quiet"; fi
+
         if [ ${#events[@]} -gt 0 ]; then
 						local -a files
 						mapfile -t files < <(printf '%s\n' "${events[@]}" | sort -u)
@@ -117,7 +124,7 @@ flush() {
                 local base_target="${target%/}/"
                 for file in "${files[@]}"; do
                     if [ -f "$dir/$file" ]; then
-                        s3cmd put "$dir/$file" "${base_target}${file}"
+                        s3cmd put $s3_opts "$dir/$file" "${base_target}${file}"
                     fi
                 done
             else
@@ -131,7 +138,7 @@ flush() {
             if [ "$target_type" = "s3" ]; then
                 local base_target="${target%/}/"
                 for file in "${del_files[@]}"; do
-                    s3cmd del "${base_target}${file}"
+                    s3cmd del $s3_opts "${base_target}${file}"
                 done
             else
                 printf '%s\n' "${del_files[@]}" | rsync --delete --delete-missing-args -lptgoD --files-from=- "$dir" "$target"
@@ -165,6 +172,11 @@ while true; do
 						continue
 				fi
 
+				# Ignore changes to the specific fasync deletion log file completely if option is set
+				if [ -n "$exclude_log" ] && [[ "$rel_path" == "$deleted_log_name" ]]; then
+						continue
+				fi
+				
 				[ -z "$quiet" ] && echo "$line"
 
 				if [ "$operation" = "DELETE" ]; then
