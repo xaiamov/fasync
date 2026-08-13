@@ -1,6 +1,6 @@
 # fasync – fanotify‑driven async sync for huge storage
 
-**fasync** is a lightweight, event‑driven synchronization tool for multi‑terabyte filesystems.  
+**fasync** is a lightweight, event‑driven synchronization tool efficiently serving multi‑terabyte filesystems.  
 Instead of recursively scanning directories, it uses Linux **fanotify** with `FAN_MARK_FILESYSTEM` to watch the whole mount and reports only the changes that happen inside your source directory.
 
 This makes it ideal for large storage partitions (several TB) where files are added, modified and removed frequently – and where scanning the entire tree would be prohibitively slow.
@@ -11,8 +11,9 @@ This makes it ideal for large storage partitions (several TB) where files are ad
 
 - A small C program (`fawatch`) watches the entire filesystem (or mount) for `CREATE`, `DELETE` and `MODIFY` events using Linux fanotify.
 - Events are filtered to the source directory you specify.
-- A bash script collects the event paths, waits for a configurable delay (default 60 seconds) to batch changes, then calls `rsync` **only for the changed files** – no full scans, no recursion.
+- A bash script collects the event paths, waits for a configurable delay (default 60 seconds) to batch changes, then calls `rsync` (or `s3cmd`) **only for the changed files** – no full scans, no recursion.
 - **Delayed deletion:** When `-D <seconds>` is given, `DELETE` events are not applied immediately. Instead, the paths are logged to a hidden file inside the source directory. After the specified delay, the script checks if the file still exists on the source; if it has been permanently removed, it is added to the next `rsync` batch, so the target side deletes it as well. This provides a safety net against accidental deletions.
+- Multiple instances can run in parallel for the same source folder. For example, you can simultaneously sync to a remote directory and an S3 cloud bucket using different delayed deletion periods;
 - **Event logging:** By default, every event is printed to stdout. Use `-q` to suppress this output.
 
 ---
@@ -38,8 +39,9 @@ make
 
 | Option           | Description |
 |------------------|-------------|
-| `-d <seconds>`   | Delay in seconds to accumulate events before invoking `rsync`. Default: `60`. |
+| `-d <seconds>`   | Delay in seconds to accumulate events before invoking sync. Default: `60`. |
 | `-D <seconds>`   | Delayed deletion – wait this many seconds before actually removing a deleted file on the target. Default: `0` (immediate). |
+| `-s`   | Skip internal deletion logs from syncing (highly recommended for S3 targets to minimize API requests). |
 | `-q`             | Quiet mode – do not print each file event to stdout. (Errors and summary messages are still shown.) |
 
 ## Examples
@@ -53,14 +55,14 @@ make
 ### Deletion with a 24‑hour grace period
 
 ```bash
-./fasync.sh /data/source backup-host:/data/target -d 60 -D 86400
+./fasync.sh /data/source backup-host:/data/target -D 86400
 ```
 Here, files that are deleted on the source will be removed from the target only after 24 hours, unless they are re‑created in the meantime.
 
-### Quiet mode (no per‑event output)
+### Cloud sync with a one-week deletion grace period
 
 ```bash
-./fasync.sh /data/source backup-host:/data/target -q
+./fasync.sh /data/source s3://cloud-bucket/path -D 604800 -s
 ```
 
 ## Features
@@ -73,6 +75,7 @@ Here, files that are deleted on the source will be removed from the target only 
 - File renaming (FAN_MOVED_FROM / FAN_MOVED_TO)
 - Attribute changes (FAN_ATTRIB)
 - Delayed deletion – configurable grace period for safe removal
+- Cloud integration – natively supports S3 storage targets via s3cmd
 - Quiet mode for minimal log output
 
 **Planned**
