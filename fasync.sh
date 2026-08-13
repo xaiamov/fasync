@@ -20,7 +20,7 @@ if [ $# -lt 2 ]; then
     echo "Usage: $0 <source dir> <target (rsync path or s3://bucket/path)> [options]"
     echo "  -d <seconds>   Delay to batch events (default 60)"
     echo "  -D <seconds>   Delay for DELETE events (default 0 – immediate)"
-    echo "  -s             Skip fasync deletion log from syncing to target (useful for s3 cloud sync)"
+    echo "  -s             Skip fasync deletion logs from syncing to target (useful for s3 cloud sync)"
     echo "  -q             Quiet mode – do not print each file path"
     exit 1
 fi
@@ -68,7 +68,6 @@ fi
 # --------------------------- Service file for delayed deletions ----------
 safe_target="$(echo "$target" | tr -c '[:alnum:]' '_' | tr -s '_')"
 deleted_log="$dir/.fasync_deleted_${safe_target}.log"
-deleted_log_name="${deleted_log##*/}"
 oldest_delete_ts=0
 
 # --------------------------- Start fawatch as a co-process ----------------
@@ -178,8 +177,8 @@ while true; do
 						continue
 				fi
 
-				# Ignore changes to the specific fasync deletion log file completely if option is set
-				if [ -n "$exclude_log" ] && [[ "$rel_path" == "$deleted_log_name" ]]; then
+				# Ignore changes to ALL fasync deletion log files completely if option is set
+				if [ -n "$exclude_log" ] && [[ "$rel_path" =~ ^\.fasync_deleted_.*\.log$ ]]; then
 						continue
 				fi
 				
