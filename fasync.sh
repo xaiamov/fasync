@@ -46,8 +46,26 @@ done
 [ ! -d "$dir" ] && { echo "Source is not a directory"; exit 1; }
 [ -z "$target" ] && { echo "Target directory not specified"; exit 1; }
 
+# --------------------------- Determine target type and check tools --------
+if [[ "$target" =~ ^s3:// ]]; then
+    target_type="s3"
+    if ! command -v s3cmd &> /dev/null; then
+        echo "[$(date)] ERROR: 's3cmd' utility not found for S3 target" >&2
+        exit 1
+    fi
+    echo "[$(date)] S3 target detected, 's3cmd' utility is available"
+else
+    target_type="rsync"
+    if ! command -v rsync &> /dev/null; then
+        echo "[$(date)] ERROR: 'rsync' utility not found" >&2
+        exit 1
+    fi
+    echo "[$(date)] Local/remote target detected, 'rsync' utility is available"
+fi
+
 # --------------------------- Service file for delayed deletions ----------
-deleted_log="$dir/.fasync_deleted.log"
+safe_target="$(echo "$target" | tr -c '[:alnum:]' '_')"
+deleted_log="$dir/.fasync_deleted_${safe_target}.log"
 
 # --------------------------- Start fawatch as a co-process ----------------
 cd "$(dirname "$0")" || exit 1
@@ -95,13 +113,29 @@ flush() {
 						local -a files
 						mapfile -t files < <(printf '%s\n' "${events[@]}" | sort -u)
             echo "[$(date)] Syncing ${#files[@]} file(s)"
-            printf '%s\n' "${files[@]}" | rsync -lptgoD --delete-missing-args --files-from=- "$dir" "$target"
+            if [ "$target_type" = "s3" ]; then
+                local base_target="${target%/}/"
+                for file in "${files[@]}"; do
+                    if [ -f "$dir/$file" ]; then
+                        s3cmd put "$dir/$file" "${base_target}${file}"
+                    fi
+                done
+            else
+                printf '%s\n' "${files[@]}" | rsync -lptgoD --delete-missing-args --files-from=- "$dir" "$target"
+            fi
         fi
         if [ ${#events_delete[@]} -gt 0 ]; then
 						local -a del_files
 						mapfile -t del_files < <(printf '%s\n' "${events_delete[@]}" | sort -u)
             echo "[$(date)] Removing ${#del_files[@]} file(s)"
-            printf '%s\n' "${del_files[@]}" | rsync --delete --delete-missing-args -lptgoD --files-from=- "$dir" "$target"
+            if [ "$target_type" = "s3" ]; then
+                local base_target="${target%/}/"
+                for file in "${del_files[@]}"; do
+                    s3cmd del "${base_target}${file}"
+                done
+            else
+                printf '%s\n' "${del_files[@]}" | rsync --delete --delete-missing-args -lptgoD --files-from=- "$dir" "$target"
+            fi
         fi
     ) &
     events=()
