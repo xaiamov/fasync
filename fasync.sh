@@ -13,7 +13,6 @@ trap 'echo "[$(date)] Received SIGINT/SIGTERM, exiting..."; exit 1' SIGINT SIGTE
 delay=60                     # buffer delay (seconds)
 delete_delay=0               # deletion delay (0 – immediate)
 quiet=                       # quiet mode (do not print each event)
-delete_check_interval=60     # interval for checking deletion log (seconds)
 exclude_log=                 # option to exclude deletion logs from sync
 
 # --------------------------- Argument parsing ---------------------------
@@ -70,6 +69,7 @@ fi
 safe_target="$(echo "$target" | tr -c '[:alnum:]' '_' | tr -s '_')"
 deleted_log="$dir/.fasync_deleted_${safe_target}.log"
 deleted_log_name="${deleted_log##*/}"
+oldest_delete_ts=0
 
 # --------------------------- Start fawatch as a co-process ----------------
 cd "$(dirname "$0")" || exit 1
@@ -79,34 +79,35 @@ echo "[$(date)] Started fawatch (PID ${FAWATCH_PID}) on $dir"
 declare -a events=()
 declare -a events_delete=()
 last_flush=$(date +%s)
-last_delete_check=$(date +%s)
 
 # --------------------------- Function to process delayed DELETEs ---------
 process_deleted_events() {
-    [ $delete_delay -eq 0 ] && return
-    [ ! -f "$deleted_log" ] && return
-
     local now=$(date +%s)
     local threshold=$((now - delete_delay))
     local temp_file=$(mktemp)
-    local count=0
+    
+    # Reset tracking variable before processing the file
+    oldest_delete_ts=0
 
-    while IFS=$'\t' read -r ts path; do
-        if [ "$ts" -le "$threshold" ]; then
-            # $path is relative to $dir
-            if [ ! -e "$dir/$path" ]; then
-                events_delete+=("$path")
-                count=$((count + 1))
+    # Read log only if it exists and has content to avoid No such file error under set -e
+    if [ -s "$deleted_log" ]; then
+        while IFS=$'\t' read -r ts path; do
+            if [ $ts -le $threshold ]; then
+                # $path is relative to $dir
+                if [ ! -e "$dir/$path" ]; then
+                    events_delete+=("$path")
+                fi
+            else
+                # Remember the timestamp of the first unexpired record to skip processing next time
+                if [ $oldest_delete_ts -eq 0 ]; then
+                    oldest_delete_ts=$ts
+                fi
+                printf "%s\t%s\n" "$ts" "$path" >> "$temp_file"
             fi
-        else
-            printf "%s\t%s\n" "$ts" "$path" >> "$temp_file"
-        fi
-    done < "$deleted_log"
+        done < "$deleted_log"
+    fi
 
     mv "$temp_file" "$deleted_log"
-    if [ $count -gt 0 ]; then
-        echo "[$(date)] Marked $count file(s) for deletion"
-    fi
 }
 
 # --------------------------- Function to flush the buffer ----------------
@@ -149,6 +150,11 @@ flush() {
     events_delete=()
 }
 
+# Initial seed on startup only if the option is active and log has content
+if [ $delete_delay -gt 0 ] && [ -s "$deleted_log" ]; then
+    process_deleted_events
+fi
+
 # --------------------------- Main loop ---------------------------------
 while true; do
     current_time=$(date +%s)
@@ -182,6 +188,11 @@ while true; do
 				if [ "$operation" = "DELETE" ]; then
 						if [ $delete_delay -gt 0 ]; then
 								printf "%s\t%s\n" "$current_time" "$rel_path" >> "$deleted_log"
+								
+								# If the log was previously empty or fully processed, seed the tracking variable
+								if [ $oldest_delete_ts -eq 0 ]; then
+										oldest_delete_ts=$current_time
+								fi
 						else
 								events_delete+=("$rel_path")
 						fi
@@ -190,9 +201,9 @@ while true; do
 				fi
     fi
 
-    if ((current_time - last_delete_check >= delete_check_interval)); then
+    # Trigger log processing only if the delayed deletion option is enabled and the oldest record matures
+    if [ $delete_delay -gt 0 ] && [ $oldest_delete_ts -gt 0 ] && (( current_time >= oldest_delete_ts + delete_delay )); then
         process_deleted_events
-        last_delete_check=$current_time
     fi
 
     # Flush buffers
