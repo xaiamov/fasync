@@ -1,0 +1,18 @@
+[Unit]
+Description=Fasync Synchronization Instance for target: %I
+After=network.target
+
+[Service]
+Type=simple
+# %I – dynamic parameter from service name. We pass it through an environment file
+EnvironmentFile=/etc/default/fasync-%I
+ExecStart=/usr/local/bin/fasync.sh $SOURCE_DIR $TARGET_DIR $OPTIONS
+# Dynamic isolation of logs for each target
+StandardOutput=append:/var/log/fasync-%I.log
+StandardError=append:/var/log/fasync-%I.log
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+

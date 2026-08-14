@@ -1,0 +1,4 @@
+# fasync target configuration example
+SOURCE_DIR="/path/to/source/"
+TARGET_DIR="user@host:/path/to/target/" # Or s3://bucket-name/path
+OPTIONS="-q -d60 -D604800" # Add -s here for S3 targets
