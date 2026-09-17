@@ -101,9 +101,9 @@ process_deleted_events() {
                 if [ $oldest_delete_ts -eq 0 ]; then
                     oldest_delete_ts=$ts
                 fi
-                printf "%s\t%s\n" "$ts" "$path" >> "$temp_file"
+                printf "%s\t%s\n" "$ts" "$path"
             fi
-        done < "$deleted_log"
+        done < "$deleted_log" > "$temp_file"
     fi
 
     mv "$temp_file" "$deleted_log"
