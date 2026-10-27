@@ -14,6 +14,7 @@ delay=60                     # buffer delay (seconds)
 delete_delay=0               # deletion delay (0 – immediate)
 quiet=                       # quiet mode (do not print each event)
 exclude_log=                 # option to exclude deletion logs from sync
+config=~/.s3cfg
 
 # --------------------------- Argument parsing ---------------------------
 if [ $# -lt 2 ]; then
@@ -21,6 +22,7 @@ if [ $# -lt 2 ]; then
     echo "  -d <seconds>   Delay to batch events (default 60)"
     echo "  -D <seconds>   Delay for DELETE events (default 0 – immediate)"
     echo "  -s             Skip fasync deletion logs from syncing to target (useful for s3 cloud sync)"
+    echo "  -c             Path to the s3cmd config"
     echo "  -q             Quiet mode – do not print each file path"
     exit 1
 fi
@@ -29,10 +31,11 @@ dir="$(realpath "$1")"
 target="$2"
 shift 2
 
-while getopts "d:D:qs" opt; do
+while getopts "d:D:c:qs" opt; do
     case $opt in
         q) quiet=ON ;;
         s) exclude_log=ON ;;
+        c) config=$OPTARG ;;
         d)
             delay=$OPTARG
             [[ $OPTARG =~ ^[0-9]+$ ]] || { echo "Delay must be a number"; exit 1; }
@@ -101,9 +104,9 @@ process_deleted_events() {
                 if [ $oldest_delete_ts -eq 0 ]; then
                     oldest_delete_ts=$ts
                 fi
-                printf "%s\t%s\n" "$ts" "$path"
+                printf "%s\t%s\n" "$ts" "$path" >> "$temp_file"
             fi
-        done < "$deleted_log" > "$temp_file"
+        done < "$deleted_log"
     fi
 
     mv "$temp_file" "$deleted_log"
@@ -124,7 +127,7 @@ flush() {
                 local base_target="${target%/}/"
                 for file in "${files[@]}"; do
                     if [ -f "$dir/$file" ]; then
-                        s3cmd put $s3_opts "$dir/$file" "${base_target}${file}"
+                        s3cmd -c $config put $s3_opts "$dir/$file" "${base_target}${file}"
                     fi
                 done
             else
@@ -138,7 +141,7 @@ flush() {
             if [ "$target_type" = "s3" ]; then
                 local base_target="${target%/}/"
                 for file in "${del_files[@]}"; do
-                    s3cmd del $s3_opts "${base_target}${file}"
+                    s3cmd -c $config del $s3_opts "${base_target}${file}"
                 done
             else
                 printf '%s\n' "${del_files[@]}" | rsync --delete --delete-missing-args -lptgoD --files-from=- "$dir" "$target"
