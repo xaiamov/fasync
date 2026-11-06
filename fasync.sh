@@ -12,7 +12,7 @@ trap 'echo "[$(date)] Received SIGINT/SIGTERM, exiting..."; exit 1' SIGINT SIGTE
 # --------------------------- Default parameters ---------------------------
 delay=60                     # buffer delay (seconds)
 delete_delay=0               # deletion delay (0 – immediate)
-quiet=                       # quiet mode (do not print each event)
+verbose=                     # verbose mode (print each event)
 exclude_log=                 # option to exclude deletion logs from sync
 config=~/.s3cfg
 
@@ -23,7 +23,7 @@ if [ $# -lt 2 ]; then
     echo "  -D <seconds>   Delay for DELETE events (default 0 – immediate)"
     echo "  -s             Skip fasync deletion logs from syncing to target (useful for s3 cloud sync)"
     echo "  -c             Path to the s3cmd config"
-    echo "  -q             Quiet mode – do not print each file path"
+    echo "  -v             Verbose mode"
     exit 1
 fi
 
@@ -31,9 +31,9 @@ dir="$(realpath "$1")"
 target="$2"
 shift 2
 
-while getopts "d:D:c:qs" opt; do
+while getopts "d:D:c:vs" opt; do
     case $opt in
-        q) quiet=ON ;;
+        v) verbose=ON ;;
         s) exclude_log=ON ;;
         c) config=$OPTARG ;;
         d)
@@ -117,7 +117,7 @@ flush() {
     # Subsequent exeution in bg
     (
         local s3_opts=""
-        if [ -n "$quiet" ]; then s3_opts="--quiet"; fi
+        if [ -z "$verbose" ]; then s3_opts="--quiet"; fi
 
         if [ ${#events[@]} -gt 0 ]; then
 						local -a files
@@ -185,7 +185,7 @@ while true; do
 						continue
 				fi
 				
-				[ -z "$quiet" ] && echo "$line"
+				[ -n "$verbose" ] && echo "$line"
 
 				if [ "$operation" = "DELETE" ]; then
 						if [ $delete_delay -gt 0 ]; then

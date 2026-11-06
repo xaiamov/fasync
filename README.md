@@ -42,7 +42,7 @@ make
 | `-d <seconds>`   | Delay in seconds to accumulate events before invoking sync. Default: `60`. |
 | `-D <seconds>`   | Delayed deletion – wait this many seconds before actually removing a deleted file on the target. Default: `0` (immediate). |
 | `-s`   | Skip internal deletion logs from syncing (highly recommended for S3 targets to minimize API requests). |
-| `-q`             | Quiet mode – do not print each file event to stdout. (Errors and summary messages are still shown.) |
+| `-v`             | Verbose mode – print each file event to stdout. |
 
 ## Examples
 
@@ -76,7 +76,7 @@ Here, files that are deleted on the source will be removed from the target only 
 - Attribute changes (FAN_ATTRIB)
 - Delayed deletion – configurable grace period for safe removal
 - Cloud integration – natively supports S3 storage targets via s3cmd
-- Quiet mode for minimal log output
+- Verbose mode
 
 **Planned**
 
